@@ -1,355 +1,312 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import {
-  Activity,
-  BookOpen,
-  Box,
-  Braces,
-  ChevronRight,
-  CirclePause,
-  CirclePlay,
-  Cpu,
-  Gauge,
-  MemoryStick,
-  RotateCcw,
-  StepForward,
-} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
-import { Switch } from '@/components/ui/switch';
 
-const PI_GROUPS = ['3141', '5926', '5358', '9793', '2384', '6264', '3383', '2795'];
-const BUS = [
-  { key: 'que', label: 'QUE', note: '读取', color: 'cyan' },
-  { key: 'mdf', label: 'MDF', note: '写入', color: 'pink' },
-  { key: 'step', label: 'STEP', note: '调度', color: 'amber' },
-  { key: 'print', label: 'PRINT', note: '输出', color: 'green' },
-] as const;
+type Phase = 'que' | 'alu' | 'mdf' | 'print';
 
-function getValue(value: number | readonly number[]) {
+type TraceFrame = {
+  phase: Phase;
+  round: number;
+  block: number;
+  cell: number;
+  items: number;
+  i: number;
+  q: number;
+  t: number;
+  divisor: number;
+  nextValue: number;
+  dBefore: number;
+  dAfter: number;
+  e: number;
+  output?: number;
+  memory: number[];
+};
+
+const PHASES: Array<{ id: Phase; call: string; title: string; description: string }> = [
+  { id: 'que', call: 'que()', title: '读内存', description: '请求递归穿过前面的块，q 逆向返回 ALU。' },
+  { id: 'alu', call: 'cal()', title: '执行计算', description: 'ALU 用当前 i、q 和进位 d 计算 T 与新 d。' },
+  { id: 'mdf', call: 'mdf(v)', title: '写回余数', description: '写回同一地址，并将本块 step 左移、补 1。' },
+  { id: 'print', call: 'print(v)', title: '封存四位', description: '结果写入第一个未 death 块，该块之后被整轮跳过。' },
+];
+
+function buildTrace(blockCount: number) {
+  const memory = Array(blockCount * 14).fill(2000) as number[];
+  const frames: TraceFrame[] = [];
+  const outputs: number[] = [];
+  let items = blockCount * 14;
+  let d = 0;
+  let e = 0;
+
+  for (let round = 0; round < blockCount; round += 1) {
+    for (let offset = 0; offset < items; offset += 1) {
+      const i = items - offset;
+      const index = round * 14 + offset;
+      const block = Math.floor(index / 14);
+      const cell = index % 14;
+      const q = memory[index];
+      const t = d * i + q * 10000;
+      const divisor = 2 * i - 1;
+      const nextValue = t % divisor;
+      const dAfter = Math.floor(t / divisor);
+      const common = { round, block, cell, items, i, q, t, divisor, nextValue, dBefore: d, dAfter, e };
+
+      frames.push({ ...common, phase: 'que', memory: [...memory] });
+      frames.push({ ...common, phase: 'alu', memory: [...memory] });
+      memory[index] = nextValue;
+      frames.push({ ...common, phase: 'mdf', memory: [...memory] });
+      d = dAfter;
+    }
+
+    const output = e + Math.floor(d / 10000);
+    outputs.push(output);
+    frames.push({
+      phase: 'print', round, block: round, cell: -1, items, i: 0, q: 0, t: 0,
+      divisor: 0, nextValue: 0, dBefore: d, dAfter: d, e, output, memory: [...memory],
+    });
+    d %= 10000;
+    e = d;
+    items -= 14;
+  }
+
+  return { frames, outputs };
+}
+
+function sliderNumber(value: number | readonly number[]) {
   return Array.isArray(value) ? Number(value[0]) : Number(value);
 }
 
+function bitsLowToHigh(processed: number, activeCell: number, showLock: boolean) {
+  return Array.from({ length: 14 }, (_, index) => {
+    if (showLock) return index === activeCell ? '0' : '1';
+    return index < processed ? '1' : '0';
+  }).join('');
+}
+
+function formatPi(groups: number[]) {
+  if (groups.length === 0) return '—';
+  const joined = groups.map((value) => String(value).padStart(4, '0')).join('');
+  return `${joined[0]}.${joined.slice(1)}`;
+}
+
 export default function Home() {
-  const basePath = import.meta.env.BASE_URL.replace(/\/$/, '');
-  const [blocks, setBlocks] = useState(4);
-  const [rate, setRate] = useState(5);
-  const [auto, setAuto] = useState(false);
-  const [tick, setTick] = useState(0);
-  const [showSketch, setShowSketch] = useState(false);
-
-  const totalTicks = blocks * 14 * 4;
-  const phase = tick % 4;
-  const wordIndex = Math.floor(tick / 4);
-  const activeBlock = Math.min(blocks - 1, Math.floor(wordIndex / 14));
-  const activeCell = wordIndex % 14;
-  const completedBlocks = Math.min(blocks, Math.floor(tick / (14 * 4)));
-  const progress = Math.min(100, Math.round((tick / totalTicks) * 100));
+  const [blockCount, setBlockCount] = useState(4);
+  const [speed, setSpeed] = useState(5);
+  const [cursor, setCursor] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const trace = useMemo(() => buildTrace(blockCount), [blockCount]);
+  const finished = cursor >= trace.frames.length;
+  const frame = trace.frames[Math.min(cursor, trace.frames.length - 1)];
 
   useEffect(() => {
-    if (!auto || tick >= totalTicks) return;
-    const timer = window.setInterval(
-      () => setTick((value) => Math.min(totalTicks, value + 1)),
-      Math.max(45, 520 - rate * 46),
-    );
+    if (!playing || finished) return;
+    const timer = window.setInterval(() => {
+      setCursor((value) => {
+        const next = Math.min(trace.frames.length, value + Math.max(1, speed * 2 - 2));
+        if (next >= trace.frames.length) setPlaying(false);
+        return next;
+      });
+    }, 110);
     return () => window.clearInterval(timer);
-  }, [auto, rate, tick, totalTicks]);
+  }, [playing, finished, speed, trace.frames.length]);
 
-  useEffect(() => {
-    setTick((value) => Math.min(value, blocks * 14 * 4));
-  }, [blocks]);
+  const phase = finished ? 'print' : frame.phase;
+  const currentRound = finished ? blockCount - 1 : frame.round;
+  const currentBlock = finished ? blockCount - 1 : frame.block;
+  const currentCell = finished ? -1 : frame.cell;
+  const currentMemory = frame.memory;
+  const shownOutputs = finished
+    ? trace.outputs
+    : trace.outputs.slice(0, frame.round + (frame.phase === 'print' ? 1 : 0));
+  const overall = Math.round((cursor / trace.frames.length) * 100);
+  const processedInBlock = phase === 'mdf' && frame.cell >= 0 ? frame.cell + 1 : Math.max(frame.cell, 0);
 
-  const output = useMemo(() => {
-    const visible = Math.max(completedBlocks, tick > 0 ? 1 : 0);
-    return PI_GROUPS.slice(0, Math.min(blocks, visible));
-  }, [blocks, completedBlocks, tick]);
-
-  const stepOnce = () => {
-    setAuto(false);
-    setTick((value) => (value >= totalTicks ? 0 : value + 1));
-  };
-
-  const reset = () => {
-    setAuto(false);
-    setTick(0);
+  const goToNextOutput = () => {
+    const next = trace.frames.findIndex((item, index) => index > cursor && item.phase === 'print');
+    setPlaying(false);
+    setCursor(next === -1 ? trace.frames.length : next);
   };
 
   return (
-    <main className="app-shell">
+    <div className="site-shell">
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">π</span>
-          <span>
-            <strong>PI · REDSTONE</strong>
-            <small>模块化水龙头计算机</small>
-          </span>
-        </div>
-        <div className="top-status">
-          <span className="live-dot" />
-          架构演示模式
-          <span className="version">SPEC / 01</span>
-        </div>
+        <a className="brand" href="#top">π Computer</a>
+        <nav aria-label="页面导航">
+          <a className="active" href="#machine">计算机</a>
+          <a href="#rounds">轮次</a>
+          <a href="#mapping">代码映射</a>
+        </nav>
       </header>
 
-      <section className="workspace" aria-label="π 计算机可视化工作区">
-        <aside className="control-rail">
-          <div className="rail-heading">
-            <span>CONTROL</span>
-            <span>01</span>
+      <main id="top">
+        <section className="intro">
+          <div>
+            <p className="kicker">Spigot algorithm · physical architecture</p>
+            <h1>模块化 π 计算机</h1>
+            <p className="lede">一个 ALU 通过递归链读写内存。每轮扫描所有未完成块，输出四位后封存最前面的块。</p>
+          </div>
+          <dl className="summary">
+            <div><dt>块数</dt><dd>{blockCount}</dd></div>
+            <div><dt>16 位存储字</dt><dd>{blockCount * 14}</dd></div>
+            <div><dt>输出位数</dt><dd>{blockCount * 4}</dd></div>
+          </dl>
+        </section>
+
+        <section className="toolbar" aria-label="模拟控制">
+          <label className="range-control">
+            <span>内存块 <output>{blockCount}</output></span>
+            <Slider min={1} max={8} step={1} value={[blockCount]} onValueChange={(value) => {
+              setPlaying(false);
+              setCursor(0);
+              setBlockCount(sliderNumber(value));
+            }} />
+          </label>
+          <label className="range-control">
+            <span>播放速度 <output>{speed}×</output></span>
+            <Slider min={1} max={10} step={1} value={[speed]} onValueChange={(value) => setSpeed(sliderNumber(value))} />
+          </label>
+          <div className="playback">
+            <Button variant="outline" onClick={() => { setPlaying(false); setCursor(Math.max(0, cursor - 1)); }}>上一步</Button>
+            <Button onClick={() => {
+              if (finished) {
+                setCursor(0);
+                setPlaying(true);
+              } else {
+                setPlaying((value) => !value);
+              }
+            }}>{playing ? '暂停' : finished ? '重播' : '播放'}</Button>
+            <Button variant="outline" onClick={() => { setPlaying(false); setCursor(Math.min(trace.frames.length, cursor + 1)); }}>下一步</Button>
+            <Button variant="outline" onClick={goToNextOutput}>到下一组</Button>
+            <button className="quiet-button" onClick={() => { setPlaying(false); setCursor(0); }}>复位</button>
+          </div>
+        </section>
+
+        <section className="status-strip" aria-label="当前运行状态">
+          <div><span>轮次</span><strong>{String(Math.min(blockCount, currentRound + 1)).padStart(2, '0')} / {String(blockCount).padStart(2, '0')}</strong></div>
+          <div><span>items</span><strong>{finished ? 0 : frame.items}</strong></div>
+          <div><span>i</span><strong>{finished ? 0 : frame.i}</strong></div>
+          <div><span>访问</span><strong>{finished ? '完成' : `a[${currentBlock}].a[${Math.max(0, currentCell)}]`}</strong></div>
+          <div><span>输出</span><strong>{shownOutputs.length ? String(shownOutputs.at(-1)).padStart(4, '0') : '—'}</strong></div>
+        </section>
+
+        <section id="machine" className="machine-section">
+          <div className="section-heading">
+            <div><p className="kicker">Live machine</p><h2>递归读写链</h2></div>
+            <p>QUE 与 MDF 都从 a[0] 进入。前面的块仍需传递请求，即实体通信的额外距离。</p>
           </div>
 
-          <section className="control-section">
-            <label className="control-label" htmlFor="block-slider">
-              <span>内存模块</span>
-              <strong>{String(blocks).padStart(2, '0')}</strong>
-            </label>
-            <Slider
-              id="block-slider"
-              aria-label="内存模块数量"
-              min={1}
-              max={8}
-              step={1}
-              value={[blocks]}
-              onValueChange={(value) => setBlocks(getValue(value))}
-            />
-            <div className="range-labels"><span>1</span><span>8 BLOCKS</span></div>
-          </section>
-
-          <section className="control-section">
-            <label className="control-label" htmlFor="rate-slider">
-              <span>时钟倍率</span>
-              <strong>{rate}×</strong>
-            </label>
-            <Slider
-              id="rate-slider"
-              aria-label="演示速度"
-              min={1}
-              max={10}
-              step={1}
-              value={[rate]}
-              onValueChange={(value) => setRate(getValue(value))}
-            />
-            <div className="range-labels"><span>SLOW</span><span>FAST</span></div>
-          </section>
-
-          <section className="control-section mode-row">
-            <span>
-              <b>自动时钟</b>
-              <small>按速率连续扫描</small>
-            </span>
-            <Switch
-              aria-label="切换自动时钟"
-              checked={auto}
-              onCheckedChange={setAuto}
-            />
-          </section>
-
-          <div className="button-grid">
-            <Button className="run-button" onClick={() => setAuto((value) => !value)}>
-              {auto ? <CirclePause /> : <CirclePlay />}
-              {auto ? '暂停' : '运行'}
-            </Button>
-            <Button variant="outline" className="step-button" onClick={stepOnce}>
-              <StepForward />
-              单步
-            </Button>
-            <Button variant="ghost" className="reset-button" onClick={reset}>
-              <RotateCcw />
-              重置演示
-            </Button>
-          </div>
-
-          <div className="formula-card">
-            <span>SPIGOT FORM</span>
-            <p>π = 2 + <i>⅓</i>(2 + <i>⅖</i>(2 + <i>⅗</i>(2 + …)))</p>
-            <small>将计算改写为特殊进制转换，每轮流出 4 位十进制数字。</small>
-          </div>
-        </aside>
-
-        <div className="main-stage">
-          <div className="stage-heading">
-            <div>
-              <span className="eyebrow">SYSTEM MAP / 整体结构</span>
-              <h1>一块模块，多四位精度</h1>
-            </div>
-            <div className="precision-readout">
-              <small>当前理论精度</small>
-              <strong>{blocks * 4}</strong>
-              <span>DIGITS</span>
-            </div>
-          </div>
-
-          <section className="diagram-card" aria-label="ALU 与内存模块数据流">
-            <div className="diagram-grid">
-              <div className={`alu-unit phase-${phase}`}>
-                <div className="unit-topline"><Cpu /><span>ALU / 00</span></div>
-                <div className="alu-core">
-                  <span>16 BIT</span>
-                  <strong>{['QUE', 'MUL', 'MDF', 'OUT'][phase]}</strong>
-                  <small>{['读取寄存器', '乘 10000 · 除基数', '写回余数', '输出 4 位'][phase]}</small>
+          <div className="machine-viewport">
+            <div className="machine-row">
+              <article className={`alu-card ${phase === 'alu' ? 'current' : ''}`}>
+                <header><span>ALU</span><small>cal()</small></header>
+                <div className="alu-formula">
+                  <span>T = d × i + q × 10000</span>
+                  <strong>{finished ? '完成' : frame.t.toLocaleString()}</strong>
+                  <code>d: {finished ? '—' : frame.dBefore} → {finished ? '—' : frame.dAfter}</code>
                 </div>
-                <div className="alu-footer">
-                  <Activity /> CLOCK {String(tick).padStart(4, '0')}
-                </div>
+                <footer>1 × 计算模块</footer>
+              </article>
+
+              <div className="signal-bridge" aria-label="ALU 与内存信号">
+                <span className={phase === 'que' ? 'active' : ''}><i>←</i> q / QUE</span>
+                <span className={phase === 'mdf' ? 'active' : ''}>v / MDF <i>→</i></span>
+                <span className={phase === 'print' ? 'active output' : ''}>PRINT <i>→</i></span>
               </div>
 
-              <div className="bus-column" aria-label="模块通信总线">
-                {BUS.map((bus, index) => (
-                  <div className={`bus bus-${bus.color} ${phase === index ? 'is-active' : ''}`} key={bus.key}>
-                    <span className="bus-name">{bus.label}</span>
-                    <span className="bus-line"><i /><ChevronRight /></span>
-                    <small>{bus.note}</small>
-                  </div>
-                ))}
-              </div>
-
-              <div className="memory-strip">
-                {Array.from({ length: blocks }, (_, blockIndex) => {
-                  const isActive = blockIndex === activeBlock && tick < totalTicks;
-                  const isDone = blockIndex < completedBlocks;
+              <div className="memory-chain">
+                {Array.from({ length: blockCount }, (_, blockIndex) => {
+                  const isDead = finished || blockIndex < currentRound;
+                  const isCurrent = !finished && blockIndex === currentBlock;
+                  const isPrintTarget = !finished && phase === 'print' && blockIndex === currentRound;
+                  const digit = trace.outputs[blockIndex];
                   return (
-                    <article
-                      className={`memory-block ${isActive && tick > 0 ? 'is-active' : ''} ${isDone ? 'is-done' : ''}`}
-                      key={blockIndex}
-                    >
-                      <div className="memory-head">
-                        <span><MemoryStick /> MEM / {String(blockIndex + 1).padStart(2, '0')}</span>
-                        <i>{isDone ? 'DONE' : isActive && tick > 0 ? 'SCAN' : 'IDLE'}</i>
+                    <article className={`memory-card ${isDead ? 'dead' : ''} ${isCurrent ? 'current' : ''} ${isPrintTarget ? 'print-target' : ''}`} key={blockIndex}>
+                      <header>
+                        <span>a[{blockIndex}]</span>
+                        <small>{isDead ? 'death = 1' : isCurrent ? phase.toUpperCase() : 'waiting'}</small>
+                      </header>
+                      <div className="memory-cells" aria-label={`内存块 ${blockIndex + 1} 的 14 个存储字`}>
+                        {Array.from({ length: 14 }, (_, cellIndex) => {
+                          const address = blockIndex * 14 + cellIndex;
+                          const selected = isCurrent && phase !== 'print' && cellIndex === currentCell;
+                          return (
+                            <span className={selected ? 'selected' : ''} key={cellIndex}>
+                              <i>{cellIndex}</i>
+                              <b>{String(currentMemory[address] ?? 2000).padStart(4, '0')}</b>
+                            </span>
+                          );
+                        })}
                       </div>
-                      <div className="cell-bank">
-                        {Array.from({ length: 14 }, (_, cellIndex) => (
-                          <span
-                            className={`${isActive && cellIndex === activeCell && tick > 0 ? 'cell-active' : ''} ${isDone ? 'cell-done' : ''}`}
-                            key={cellIndex}
-                          >
-                            <small>{String(cellIndex).padStart(2, '0')}</small>
-                            <b>{isDone ? String((2000 + blockIndex * 137 + cellIndex * 29) % 9999).padStart(4, '0') : '2000'}</b>
-                          </span>
-                        ))}
-                      </div>
-                      <div className="block-progress">
-                        <span style={{ width: `${isDone ? 100 : isActive ? ((activeCell + 1) / 14) * 100 : 0}%` }} />
-                      </div>
-                      <div className="digit-port">
-                        <span>DISPLAY</span>
-                        <strong>{isDone ? PI_GROUPS[blockIndex] : '····'}</strong>
-                      </div>
+                      <dl className="registers">
+                        <div><dt>lock</dt><dd>{isCurrent && phase !== 'print' ? bitsLowToHigh(0, currentCell, true) : '11111111111111'}</dd></div>
+                        <div><dt>step</dt><dd>{isDead ? '11111111111111' : isCurrent && phase !== 'print' ? bitsLowToHigh(processedInBlock, currentCell, false) : '00000000000000'}</dd></div>
+                      </dl>
+                      <footer>
+                        <span>digit</span>
+                        <strong>{isDead || isPrintTarget ? String(digit).padStart(4, '0') : '—'}</strong>
+                      </footer>
+                      {blockIndex < blockCount - 1 && <span className="next-link">next →</span>}
                     </article>
                   );
                 })}
-                <button className="add-block" onClick={() => setBlocks((value) => Math.min(8, value + 1))} disabled={blocks === 8}>
-                  <Box />
-                  <span>+ MODULE</span>
-                  <small>14 × 16 BIT</small>
-                </button>
               </div>
             </div>
-
-            <div className="signal-legend">
-              <span><i className="legend-cyan" /> QUE 读取</span>
-              <span><i className="legend-pink" /> MDF 写入</span>
-              <span><i className="legend-amber" /> STEP 调度</span>
-              <span><i className="legend-green" /> PRINT 输出</span>
-              <span className="scroll-hint">横向滚动查看全部模块 <ChevronRight /></span>
-            </div>
-          </section>
-
-          <section className="output-panel">
-            <div className="output-title">
-              <span><Gauge /> DECIMAL STREAM</span>
-              <small>{progress}% COMPLETE</small>
-            </div>
-            <div className="digit-stream" aria-live="polite">
-              <span className="pi-symbol">π</span>
-              <span className="equals">=</span>
-              {output.length === 0 ? (
-                <span className="waiting">WAITING FOR CLOCK…</span>
-              ) : (
-                <span className="digits">
-                  <b>{output[0]?.[0] ?? '3'}.</b>
-                  {output.map((group, index) => (
-                    <i key={index}>{index === 0 ? group.slice(1) : group}</i>
-                  ))}
-                  {completedBlocks < blocks && <em>_</em>}
-                </span>
-              )}
-            </div>
-            <div className="progress-track"><span style={{ width: `${progress}%` }} /></div>
-          </section>
-
-          <section className="explain-grid">
-            <article>
-              <span className="card-index">01 / 模块规则</span>
-              <h2>14 个存储字 → 4 位精度</h2>
-              <p>每块包含 14 个 16 位内存单元、本地扫描调度与一个 4 位显示端口。增加模块即线性增加容量。</p>
-            </article>
-            <article>
-              <span className="card-index">02 / 通信代价</span>
-              <h2>算法 O(n²)，实体约 O(n³)</h2>
-              <p>ALU 要通过级联总线逐块读写。规模增长时，通信距离与时序也在增长，把原本的二次计算拖慢至约三次。</p>
-            </article>
-            <article>
-              <span className="card-index">03 / 红石约束</span>
-              <h2>内存两层错位，防止串扰</h2>
-              <p>中继器相邻会串信号，所以正确版内存需要拉开间距、双层错位。体积约翻倍，但读写边界更可靠。</p>
-            </article>
-          </section>
-
-          <button className="sketch-toggle" onClick={() => setShowSketch((value) => !value)} aria-expanded={showSketch}>
-            <span><BookOpen /> 查看原始手稿与图例对照</span>
-            <span>{showSketch ? '收起' : '展开'} <ChevronRight /></span>
-          </button>
-          {showSketch && (
-            <figure className="sketch-panel">
-              <img src={`${basePath}/architecture-sketch.png`} alt="原始手绘的 ALU、四个内存模块和通信总线架构图" />
-              <figcaption>原始设计草图 · 网页中的 QUE / MDF / STEP / PRINT 四组信号与此处一一对应。</figcaption>
-            </figure>
-          )}
-        </div>
-
-        <aside className="metrics-rail">
-          <div className="rail-heading"><span>TELEMETRY</span><span>02</span></div>
-          <div className="metric-card accent-cyan">
-            <MemoryStick />
-            <span>存储字</span>
-            <strong>{blocks * 14}</strong>
-            <small>{blocks} 块 × 14</small>
           </div>
-          <div className="metric-card accent-pink">
-            <Braces />
-            <span>总位宽</span>
-            <strong>{blocks * 14 * 16}</strong>
-            <small>BIT CAPACITY</small>
-          </div>
-          <div className="metric-card accent-amber">
-            <Activity />
-            <span>通信成本</span>
-            <strong>{Math.pow(blocks, 3)}</strong>
-            <small>RELATIVE n³</small>
-          </div>
-          <div className="cycle-card">
-            <span>CURRENT CYCLE</span>
-            <div className="cycle-ring" style={{ '--cycle': `${progress * 3.6}deg` } as React.CSSProperties}>
-              <b>{progress}</b><small>%</small>
-            </div>
-            <dl>
-              <div><dt>BLOCK</dt><dd>{String(activeBlock + 1).padStart(2, '0')}</dd></div>
-              <div><dt>ADDRESS</dt><dd>{String(activeCell).padStart(2, '0')}</dd></div>
-              <div><dt>PHASE</dt><dd>{['QUE', 'MUL', 'MDF', 'PRINT'][phase]}</dd></div>
-            </dl>
-          </div>
-          <div className="architecture-note">
-            <span>DESIGN NOTE</span>
-            <p>内存是可复制的，ALU 只需一个。协作时可把每块内存分配给不同建造者，再用相同四线总线验收。</p>
-          </div>
-        </aside>
-      </section>
 
-      <footer>
-        <span>MODULAR PI COMPUTER</span>
-        <span>14 WORDS / BLOCK · 4 DIGITS / BLOCK · 16 BIT / WORD</span>
-      </footer>
-    </main>
+          <div className="phase-row">
+            {PHASES.map((item, index) => (
+              <article className={phase === item.id ? 'active' : ''} key={item.id}>
+                <span>{String(index + 1).padStart(2, '0')}</span>
+                <div><code>{item.call}</code><strong>{item.title}</strong><p>{item.description}</p></div>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="decimal-output" aria-live="polite">
+          <div><p className="kicker">Printed stream</p><h2>π = {formatPi(shownOutputs)}</h2></div>
+          <span>{overall}%</span>
+          <div className="thin-progress"><i style={{ width: `${overall}%` }} /></div>
+        </section>
+
+        <section id="rounds" className="round-section">
+          <div className="section-heading">
+            <div><p className="kicker">Shrinking workload</p><h2>每轮封存一块</h2></div>
+            <p>items 每次减 14。已输出块的 step[13] 保持为 1，que() / mdf() 直接进入 next。</p>
+          </div>
+          <div className="round-table">
+            {Array.from({ length: blockCount }, (_, round) => (
+              <div className={round === currentRound ? 'active' : ''} key={round}>
+                <span>round {round + 1}</span>
+                <div className="round-blocks">
+                  {Array.from({ length: blockCount }, (_, block) => <i className={block < round ? 'skipped' : block === round ? 'output' : ''} key={block}>{block + 1}</i>)}
+                </div>
+                <code>items = {(blockCount - round) * 14}</code>
+                <strong>→ digit[{round}]</strong>
+              </div>
+            ))}
+          </div>
+          <p className="complexity-note"><b>O(n²)</b> 次内存读写 × <b>O(n)</b> 级联传递距离 ≈ <b>O(n³)</b> 实体时间</p>
+        </section>
+
+        <section id="mapping" className="mapping-section">
+          <div className="section-heading"><div><p className="kicker">Source map</p><h2>代码与电路的对应</h2></div></div>
+          <div className="mapping-grid">
+            <article><code>a[14]</code><h3>14 个 16 位存储字</h3><p>初值 2000。两层错位是物理布局，用于避免中继器串扰。</p></article>
+            <article><code>lock + step</code><h3>地址选择与轮内进度</h3><p>lock 中最低的 0 定位当前地址；mdf() 后 step 补 1，14 位全满便转向 next。</p></article>
+            <article><code>death</code><h3>块级退役标志</h3><p>print() 只写入第一个 death = 0 的块。该块之后不再参与数值计算。</p></article>
+            <article><code>next</code><h3>可复制的级联接口</h3><p>增加一块就增加 14 个存储字，并让外层循环再输出一组四位数字。</p></article>
+          </div>
+        </section>
+
+        <details className="source-sketch">
+          <summary>原始手稿</summary>
+          <img src="architecture-sketch.png" alt="ALU 和多个内存块级联的原始手绘结构图" />
+        </details>
+      </main>
+
+      <footer><span>π Computer</span><span>14 words / block · 4 digits / round</span></footer>
+    </div>
   );
 }

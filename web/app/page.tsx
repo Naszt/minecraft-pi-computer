@@ -1,12 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 
 const WORDS = 14;
+const BASE_URL = import.meta.env.BASE_URL;
+const PrinciplePage = lazy(() => import('./principle'));
+
+export type SitePageName = 'principle' | 'circuit' | 'design';
 
 type AluStep = {
   round: number;
@@ -115,14 +119,21 @@ function WireBundle({
   );
 }
 
-export default function Home() {
+export default function Home({ page = 'principle' }: { page?: SitePageName }) {
   const [blockCount, setBlockCount] = useState(4);
   const [speed, setSpeed] = useState(5);
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [details, setDetails] = useState(false);
-  const [designTarget, setDesignTarget] = useState<'alu' | 'block'>('alu');
-  const [designBlock, setDesignBlock] = useState(0);
+  const [designTarget, setDesignTarget] = useState<'alu' | 'block'>(() => {
+    if (typeof window === 'undefined') return 'alu';
+    return new URLSearchParams(window.location.search).get('target') === 'block' ? 'block' : 'alu';
+  });
+  const [designBlock] = useState(() => {
+    if (typeof window === 'undefined') return 0;
+    const block = Number(new URLSearchParams(window.location.search).get('block'));
+    return Number.isFinite(block) ? Math.max(0, Math.min(7, Math.round(block))) : 0;
+  });
   const trace = useMemo(() => buildTrace(blockCount), [blockCount]);
   const totalSteps = trace.steps.length;
   const executed = Math.min(cursor, totalSteps);
@@ -166,11 +177,7 @@ export default function Home() {
   const currentCell = selectedStep.cell;
 
   const openDesign = (target: 'alu' | 'block', blockIndex = 0) => {
-    setDesignTarget(target);
-    setDesignBlock(blockIndex);
-    window.requestAnimationFrame(() => {
-      document.getElementById('design')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
+    window.location.href = `${BASE_URL}design/?target=${target}&block=${blockIndex}`;
   };
 
   return (
@@ -178,89 +185,20 @@ export default function Home() {
       <header className="topbar">
         <span className="brand">π Computer</span>
         <nav aria-label="页面章节">
-          <a href="#principle">数学原理</a>
-          <a href="#machine">实体电路</a>
-          <a href="#design">详细设计</a>
+          <a href={BASE_URL} aria-current={page === 'principle' ? 'page' : undefined}>数学原理</a>
+          <a href={`${BASE_URL}circuit/`} aria-current={page === 'circuit' ? 'page' : undefined}>实体电路</a>
+          <a href={`${BASE_URL}design/`} aria-current={page === 'design' ? 'page' : undefined}>详细设计</a>
         </nav>
         <span className="header-note">Spigot · 14 × 16-bit / block</span>
       </header>
 
       <main>
-        <section className="title-row hero-row">
-          <div>
-            <p className="kicker">From mixed radix to redstone</p>
-            <h1>模块化 π 计算机</h1>
-          </div>
-          <p>先把 π 写成特殊进位制下无限重复的 2，再让级联内存与 ALU 完成逐位进制转换。</p>
-        </section>
+        {page === 'principle' && (
+          <Suspense fallback={<p className="markdown-loading">正在排版公式…</p>}><PrinciplePage /></Suspense>
+        )}
 
-        <section className="principle-section page-section" id="principle">
-          <div className="section-heading">
-            <div><span>01</span><p className="kicker">Mathematical principle</p><h2>数学原理</h2></div>
-            <p>算法不是直接“求 π”，而是把一个已知表示从特殊的混合进位制连续转换为十进制。</p>
-          </div>
-
-          <div className="derivation">
-            <article>
-              <span className="step-number">A</span>
-              <h3>欧拉变换</h3>
-              <p>将 arctan(1) 的交错级数做欧拉变换，得到只含正项、适合逐级展开的级数。</p>
-              <div className="equation">π / 4 = Σ<sub>k≥0</sub> (−1)<sup>k</sup> / (2k + 1)</div>
-              <div className="equation muted-equation">Σ(−1)<sup>k</sup>a<sub>k</sub> = Σ(−1)<sup>k</sup>Δ<sup>k</sup>a<sub>0</sub> / 2<sup>k+1</sup></div>
-              <div className="equation muted-equation">Δ<sup>k</sup>a<sub>0</sub> = (−1)<sup>k</sup> k!2<sup>k</sup> / (2k + 1)!!</div>
-              <div className="equation key-equation">π / 2 = Σ<sub>k≥0</sub> k! / (2k + 1)!!</div>
-            </article>
-
-            <article>
-              <span className="step-number">B</span>
-              <h3>改写成混合进位制</h3>
-              <p>把相邻项的比例逐层展开；与普通十进制不同，这里每一位的权重都不同。</p>
-              <div className="equation multiline-equation">π = 2 + <span>1/3</span>(2 + <span>2/5</span>(2 + <span>3/7</span>(2 + …)))</div>
-              <div className="radix-row"><b>进位权重 𝓑</b><span>1/3</span><span>2/5</span><span>3/7</span><span>4/9</span><span>…</span></div>
-              <p className="result-line">所以 π 在 𝓑 进制中就是：<strong>2 ; 2, 2, 2, 2, …</strong></p>
-            </article>
-
-            <article>
-              <span className="step-number">C</span>
-              <h3>逐段转成十进制</h3>
-              <p>从末位向前乘 10000 并逐级进位。一次完整扫描会稳定输出 4 位十进制数字。</p>
-              <div className="conversion-flow" aria-label="混合进位制转换过程">
-                <span>q × 10000</span><i>→</i><span>加 d × i</span><i>→</i><span>除 2i−1</span><i>→</i><span>余数写回</span>
-              </div>
-              <div className="formula-pair">
-                <code>T = d × i + q × 10000</code>
-                <code>q′ = T mod (2i − 1)</code>
-                <code>d′ = ⌊T / (2i − 1)⌋</code>
-              </div>
-              <p className="result-line">预留 4 位进位空间，输出序列为 <strong>0003 · 1415 · 9265 · …</strong></p>
-            </article>
-          </div>
-
-          <div className="principle-notes">
-            <div><b>14 × 16-bit</b><span>每个 block 保存 14 个余数，增加约 4 位精度。</span></div>
-            <div><b>O(N²)</b><span>输出 N 位时，每次提取都要扫描尚未封存的内存。</span></div>
-            <div><b>≈ O(N³)</b><span>实体电路沿模块链传递信号，距离带来额外代价。</span></div>
-          </div>
-
-          <div className="video-section">
-            <div>
-              <p className="kicker">Video walkthrough</p>
-              <h3>配套讲解视频</h3>
-              <p>连续理解公式推导与 Spigot 算法后，可以直接进入下方电路逐步运行。</p>
-              <a href="https://www.bilibili.com/video/BV1HvhdzdEKy" target="_blank" rel="noreferrer">在哔哩哔哩打开 ↗</a>
-            </div>
-            <div className="video-frame">
-              <iframe
-                src="https://player.bilibili.com/player.html?bvid=BV1HvhdzdEKy&page=1&high_quality=1&danmaku=0"
-                title="π 算法原理配套视频"
-                allow="autoplay; fullscreen; picture-in-picture"
-                allowFullScreen
-                loading="lazy"
-              />
-            </div>
-          </div>
-        </section>
-
+        {page === 'circuit' && (
+          <>
         <section className="circuit-section page-section" id="machine">
           <div className="section-heading">
             <div><span>02</span><p className="kicker">Physical architecture simulator</p><h2>实体电路</h2></div>
@@ -434,7 +372,10 @@ export default function Home() {
             </div>
           </section>
         )}
+          </>
+        )}
 
+        {page === 'design' && (
         <section className="design-section page-section" id="design">
           <div className="section-heading">
             <div><span>03</span><p className="kicker">Module specification</p><h2>详细设计</h2></div>
@@ -496,9 +437,13 @@ export default function Home() {
             </div>
           )}
         </section>
+        )}
       </main>
 
-      <footer><span>π Computer</span><span>{totalSteps} ALU steps · {blockCount * 4} output digits</span></footer>
+      <footer>
+        <span>π Computer</span>
+        <span>{page === 'circuit' ? `${totalSteps} ALU steps · ${blockCount * 4} output digits` : page === 'design' ? 'ALU / block module specification' : 'Euler transform · mixed radix · Spigot'}</span>
+      </footer>
     </div>
   );
 }

@@ -1,10 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import Home from './page';
+import Home, { type SitePageName } from './page';
 import './globals.css';
 
-createRoot(document.getElementById('root')!).render(
+const root = document.getElementById('root')!;
+const requestedPage = root.dataset.page;
+const page: SitePageName = requestedPage === 'circuit' || requestedPage === 'design' ? requestedPage : 'principle';
+
+createRoot(root).render(
   <StrictMode>
-    <Home />
+    <Home page={page} />
   </StrictMode>,
 );

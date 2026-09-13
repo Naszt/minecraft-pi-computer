@@ -50,9 +50,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outli
 .topbar nav { display: flex; align-items: center; gap: clamp(16px, 3vw, 36px); }
 .topbar nav a { padding: 4px 0; border-bottom: 1px solid transparent; color: var(--soft-ink); font-size: .7rem; text-decoration: none; }
 .topbar nav a:hover, .topbar nav a:focus-visible { border-bottom-color: var(--ink); color: var(--ink); }
+.topbar nav a[aria-current="page"] { border-bottom-color: var(--accent); color: var(--ink); }
 .header-note { color: var(--soft-ink); font: .72rem var(--digits); }
 
-main { width: min(1500px, 100%); margin: 0 auto; padding: 30px clamp(18px, 4vw, 58px) 54px; }
+main { width: min(1500px, 100%); min-height: calc(100vh - 102px); margin: 0 auto; padding: 30px clamp(18px, 4vw, 58px) 54px; }
 .title-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 32px; margin-bottom: 22px; }
 .title-row > p { max-width: 570px; margin: 0; color: var(--soft-ink); font-size: .8rem; line-height: 1.65; text-align: right; }
 .kicker { margin: 0 0 5px; color: var(--soft-ink); font: .67rem var(--digits); letter-spacing: .13em; text-transform: uppercase; }
@@ -97,6 +98,19 @@ h3 { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: 1rem; font-
 .video-frame { aspect-ratio: 16 / 9; min-width: 0; background: var(--pale); }
 .video-frame iframe { width: 100%; height: 100%; display: block; border: 0; }
 .circuit-section { margin-bottom: 22px; }
+
+.markdown-page { width: min(900px, 100%); margin: 0 auto; color: var(--ink); }
+.markdown-loading { margin: 40px 0; color: var(--soft-ink); text-align: center; }
+.markdown-page > h1 { margin: 8px 0 38px; padding-bottom: 20px; border-bottom: 1px solid var(--ink); font-size: clamp(2rem, 4vw, 3.4rem); }
+.markdown-page h2 { margin: 56px 0 20px; padding-top: 20px; border-top: 1px solid var(--ink); font-size: 1.55rem; }
+.markdown-page p { margin: 15px 0; font-size: 1rem; line-height: 1.9; }
+.markdown-page strong { font-weight: 600; }
+.markdown-page mjx-container { max-width: 100%; color: var(--ink); }
+.markdown-page mjx-container[display="true"] { margin: 24px 0; padding: 18px 12px; overflow-x: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.markdown-page pre { margin: 24px 0; padding: 20px; overflow-x: auto; border-left: 3px solid var(--accent); background: var(--pale); }
+.markdown-page pre code { color: var(--ink); font: .82rem/1.75 var(--digits); }
+.markdown-page :not(pre) > code { padding: 1px 4px; color: var(--accent); background: var(--pale); font: .86em var(--digits); }
+.principle-video { width: min(1040px, 100%); margin: 64px auto 0; }
 
 .controls { display: grid; grid-template-columns: minmax(190px, 250px) minmax(190px, 250px) 1fr auto; align-items: center; gap: 24px; padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .small-range { display: grid; grid-template-columns: 1fr 120px; align-items: center; gap: 14px; color: var(--soft-ink); font-size: .72rem; }
@@ -202,7 +216,7 @@ h3 { margin: 0; font-family: Georgia, "Songti SC", serif; font-size: 1rem; font-
 .calculation-grid p { margin: 8px 0 0; color: var(--soft-ink); font-size: .68rem; line-height: 1.55; }
 .calculation-grid .print-calculation { background: #f3f6f4; }.calculation-grid .print-calculation > span, .calculation-grid .print-calculation code b { color: var(--green); }
 
-.design-section { margin-top: 72px; }
+.design-section { margin-top: 0; }
 .design-tabs { display: flex; gap: 0; margin-top: 24px; border-bottom: 1px solid var(--ink); }
 .design-tabs button { min-width: 120px; padding: 10px 16px; border: 0; border-right: 1px solid var(--line); color: var(--soft-ink); background: transparent; cursor: pointer; font: .72rem var(--digits); }
 .design-tabs button.active { color: #fff; background: var(--ink); }
